@@ -30,7 +30,5 @@ where
 
     on_csv(format!("__META__,affected_rows={}", affected));
 
-    on_csv(format!("__META__,affected_rows={:?}", affected));
-
     Ok(())
 }
