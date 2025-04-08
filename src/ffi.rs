@@ -54,13 +54,13 @@ pub extern "C" fn odbc_connect(
     let handle_ref = unsafe { &mut *handle };
 
     if let Some(connection) = &handle_ref.connection {
-        match connection.connect(conn_str_rs) {
+        return match connection.connect(conn_str_rs) {
             Ok(_) => OdbcError::Success as c_int,
             Err(_) => OdbcError::ConnectionError as c_int,
-        }
-    } else {
-        OdbcError::InvalidHandle as c_int
+        };
     }
+
+    OdbcError::InvalidHandle as c_int
 }
 
 #[unsafe(no_mangle)]
