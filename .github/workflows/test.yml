@@ -1,0 +1,51 @@
+name: Rust Tests with ODBC + PostgreSQL (Direct Connection)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15
+        ports:
+          - 5432:5432
+        env:
+          POSTGRES_USER: testuser
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_DB: testdb
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies (ODBC + PostgreSQL driver)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y unixodbc-dev odbc-postgresql
+
+      - name: Register PostgreSQL ODBC driver
+        run: |
+          echo "[PostgreSQL Unicode]" | sudo tee -a /etc/odbcinst.ini
+          echo "Description=PostgreSQL ODBC driver" | sudo tee -a /etc/odbcinst.ini
+          echo "Driver=/usr/lib/x86_64-linux-gnu/odbc/psqlodbcw.so" | sudo tee -a /etc/odbcinst.ini
+
+      - name: Set environment variable (direct connection string)
+        run: |
+          echo 'TEST_DATABASE_URL=Driver={PostgreSQL Unicode};Server=localhost;Port=5432;Database=testdb;Uid=testuser;Pwd=testpass;' >> $GITHUB_ENV
+
+      - name: Run tests (single thread)
+        run: cargo test -- --test-threads=1
