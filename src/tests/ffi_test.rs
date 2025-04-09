@@ -1,10 +1,13 @@
 #[cfg(test)]
 mod tests {
-    use std::env;
-    use std::ffi::CString;
-    use std::os::raw::c_int;
+    use std::ffi::{CStr, CString, c_char};
+    use std::os::raw::{c_int, c_void};
+    use std::sync::Mutex;
+    use std::{env, sync::Arc};
 
-    use crate::ffi::{OdbcError, odbc_connect, odbc_create_connection, odbc_free_connection};
+    use crate::ffi::{
+        OdbcError, odbc_connect, odbc_create_connection, odbc_execute, odbc_free_connection,
+    };
 
     #[test]
     fn test_create_connection() {
@@ -93,4 +96,101 @@ mod tests {
             "Failed to free connection"
         );
     }
+
+    #[test]
+    fn test_execute_via_ffi() {
+        use crate::ffi::{
+            OdbcError, odbc_connect, odbc_create_connection, odbc_execute, odbc_free_connection,
+        };
+        use std::env;
+        use std::ffi::{CStr, CString};
+        use std::os::raw::{c_char, c_void};
+        use std::sync::{Arc, Mutex};
+
+        let conn_url = env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL not set");
+        let conn_url_c = CString::new(conn_url).unwrap();
+
+        let handle = unsafe { odbc_create_connection() };
+        assert!(!handle.is_null());
+
+        let connect_result = unsafe { odbc_connect(handle, conn_url_c.as_ptr()) };
+        assert_eq!(connect_result, OdbcError::Success as i32);
+
+        let create_sql =
+            CString::new("CREATE TABLE IF NOT EXISTS temp_ffi_test (id INT, name VARCHAR(50))")
+                .unwrap();
+        let create_result = unsafe {
+            odbc_execute(
+                handle,
+                create_sql.as_ptr(),
+                dummy_callback,
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(create_result, OdbcError::Success as i32);
+
+        let insert_sql =
+            CString::new("INSERT INTO temp_ffi_test (id, name) VALUES (1, 'Test')").unwrap();
+        let insert_result = unsafe {
+            odbc_execute(
+                handle,
+                insert_sql.as_ptr(),
+                dummy_callback,
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(insert_result, OdbcError::Success as i32);
+
+        let lines: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let user_data_arc = Arc::clone(&lines); // clone para manter ownership fora
+
+        extern "C" fn collect_callback(line: *const c_char, user_data: *mut c_void) {
+            if line.is_null() || user_data.is_null() {
+                return;
+            }
+
+            let c_str = unsafe { CStr::from_ptr(line) };
+            let rust_string = c_str.to_string_lossy().to_string();
+
+            let arc = unsafe { Arc::from_raw(user_data as *const Mutex<Vec<String>>) };
+
+            {
+                let mut lock = arc.lock().unwrap();
+                lock.push(rust_string);
+            }
+
+            std::mem::forget(arc);
+        }
+
+        let user_data_ptr = Arc::into_raw(user_data_arc) as *mut c_void;
+
+        let select_sql = CString::new("SELECT id, name FROM temp_ffi_test").unwrap();
+        let select_result =
+            unsafe { odbc_execute(handle, select_sql.as_ptr(), collect_callback, user_data_ptr) };
+        assert_eq!(select_result, OdbcError::Success as i32);
+
+        unsafe {
+            Arc::from_raw(user_data_ptr as *const Mutex<Vec<String>>);
+        }
+
+        let collected = lines.lock().unwrap();
+        assert_eq!(collected[0], "id,name");
+        assert_eq!(collected[1], "1,Test");
+
+        let drop_sql = CString::new("DROP TABLE temp_ffi_test").unwrap();
+        let drop_result = unsafe {
+            odbc_execute(
+                handle,
+                drop_sql.as_ptr(),
+                dummy_callback,
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(drop_result, OdbcError::Success as i32);
+
+        let free_result = unsafe { odbc_free_connection(handle) };
+        assert_eq!(free_result, OdbcError::Success as i32);
+    }
+
+    extern "C" fn dummy_callback(_line: *const c_char, _user_data: *mut c_void) {}
 }
