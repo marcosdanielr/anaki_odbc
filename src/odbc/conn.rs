@@ -1,14 +1,17 @@
 use odbc_api::{Connection, ConnectionOptions, Environment, Error};
+use std::sync::Arc;
 
-pub struct OdbcConnection {
-    pub environment: Environment,
+#[derive(Clone)]
+pub struct OdbcConnectionManager {
+    environment: Arc<Environment>,
 }
 
-impl OdbcConnection {
+impl OdbcConnectionManager {
     pub fn new() -> Result<Self, Error> {
         let environment = Environment::new()?;
-
-        Ok(Self { environment })
+        Ok(Self {
+            environment: Arc::new(environment),
+        })
     }
 
     pub fn connect(&self, conn_str: &str) -> Result<Connection<'_>, Error> {
