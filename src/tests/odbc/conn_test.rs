@@ -1,11 +1,11 @@
 #[cfg(test)]
 mod tests {
-    use crate::odbc::conn::OdbcConnection;
+    use crate::odbc::conn::OdbcConnectionManager;
     use std::env;
 
     #[test]
     fn test_connect_success() {
-        let odbc_connection = OdbcConnection::new().expect("failed to connect do database");
+        let odbc_connection = OdbcConnectionManager::new().expect("failed to connect do database");
 
         let conn_url = env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL not set");
 
