@@ -2,7 +2,18 @@
 mod tests {
     use crate::odbc::conn::OdbcConnectionManager;
     use crate::odbc::exec::execute;
+    use serde::Deserialize;
     use std::env;
+
+    #[derive(Deserialize)]
+    struct Header {
+        columns: Vec<String>,
+    }
+
+    #[derive(Deserialize)]
+    struct Meta {
+        affected_rows: String,
+    }
 
     #[test]
     fn test_execute_query() {
@@ -14,15 +25,21 @@ mod tests {
 
         let sql = "SELECT 1 AS id, 'test' AS name";
 
-        let mut csv_lines = vec![];
+        let mut binary_data = vec![];
 
-        let result = execute(&mut conn, sql, |line| {
-            csv_lines.push(line);
+        let result = execute(&mut conn, sql, |data| {
+            binary_data.push(data);
         });
 
         assert!(result.is_ok(), "Expected Ok(()), got {:?}", result);
-        assert_eq!(csv_lines[0], "id,name");
-        assert_eq!(csv_lines[1], "1,test");
+
+        let header: Header = rmp_serde::from_slice(&binary_data[0]).unwrap();
+        assert_eq!(header.columns, vec!["id", "name"]);
+
+        let row: std::collections::HashMap<String, serde_json::Value> =
+            rmp_serde::from_slice(&binary_data[1]).unwrap();
+        assert_eq!(row["id"], 1);
+        assert_eq!(row["name"], "test");
     }
 
     #[test]
@@ -83,21 +100,19 @@ mod tests {
             insert_all_result
         );
 
-        let mut lines = vec![];
+        let mut binary_data = vec![];
         let delete_result = execute(
             &mut conn,
             "DELETE FROM temp_create_test WHERE name LIKE 'M%'",
-            |line| {
-                lines.push(line);
+            |data| {
+                binary_data.push(data);
             },
         );
 
         assert!(delete_result.is_ok(), "DELETE failed: {:?}", delete_result);
-        assert!(
-            lines.contains(&"__META__,affected_rows=2".to_string()),
-            "Expected 2 rows affected, but got: {:?}",
-            lines
-        );
+
+        let meta: Meta = rmp_serde::from_slice(&binary_data[0]).unwrap();
+        assert_eq!(meta.affected_rows, "2");
 
         let drop_result = execute(&mut conn, "DROP TABLE temp_create_test", |_| {});
         assert!(drop_result.is_ok(), "Failed to drop table after test");

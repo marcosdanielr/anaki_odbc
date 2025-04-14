@@ -1,20 +1,27 @@
 use odbc_api::{Connection, Error};
+use rmp_serde::Serializer;
+use serde::Serialize;
 
 use super::util;
 
 const BATCH_SIZE: usize = 5_000;
-const BUFFER_SIZE: usize = 4_096;
+const BUFFER_SIZE: usize = 262_144;
 
-pub fn execute<F>(conn: &mut Connection<'_>, sql: &str, mut on_csv: F) -> Result<(), Error>
+#[derive(Serialize)]
+struct Meta {
+    affected_rows: String,
+}
+
+pub fn execute<F>(conn: &mut Connection<'_>, sql: &str, mut on_binary: F) -> Result<(), Error>
 where
-    F: FnMut(String),
+    F: FnMut(Vec<u8>),
 {
     let mut stmt = conn.prepare(sql)?;
     let executed = stmt.execute(())?;
 
     if let Some(mut cursor) = executed {
-        util::stream_header(&mut cursor, &mut on_csv)?;
-        util::stream_rows(cursor, &mut on_csv, BATCH_SIZE, BUFFER_SIZE)?;
+        let col_names = util::stream_header(&mut cursor, &mut on_binary)?;
+        util::stream_rows(cursor, &mut on_binary, BATCH_SIZE, BUFFER_SIZE, col_names)?;
 
         return Ok(());
     }
@@ -28,7 +35,12 @@ where
         .map(|n| n.to_string())
         .unwrap_or_else(|| "unknown".into());
 
-    on_csv(format!("__META__,affected_rows={}", affected));
+    let meta = Meta {
+        affected_rows: affected,
+    };
+    let mut buf = Vec::new();
+    meta.serialize(&mut Serializer::new(&mut buf)).unwrap();
+    on_binary(buf);
 
     Ok(())
 }

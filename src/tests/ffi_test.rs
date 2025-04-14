@@ -1,13 +1,19 @@
 #[cfg(test)]
 mod tests {
-    use std::ffi::{CStr, CString, c_char};
+    use serde::Deserialize;
+    use std::ffi::CString;
     use std::os::raw::{c_int, c_void};
-    use std::sync::Mutex;
-    use std::{env, sync::Arc};
+
+    use std::env;
 
     use crate::ffi::{
-        OdbcError, odbc_connect, odbc_create_connection, odbc_execute, odbc_free_connection,
+        BinaryData, OdbcError, odbc_connect, odbc_create_connection, odbc_free_connection,
     };
+
+    #[derive(Deserialize)]
+    struct Header {
+        columns: Vec<String>,
+    }
 
     #[test]
     fn test_create_connection() {
@@ -100,11 +106,12 @@ mod tests {
     #[test]
     fn test_execute_via_ffi() {
         use crate::ffi::{
-            OdbcError, odbc_connect, odbc_create_connection, odbc_execute, odbc_free_connection,
+            BinaryData, OdbcError, odbc_connect, odbc_create_connection, odbc_execute,
+            odbc_free_connection,
         };
         use std::env;
-        use std::ffi::{CStr, CString};
-        use std::os::raw::{c_char, c_void};
+        use std::ffi::CString;
+        use std::os::raw::c_void;
         use std::sync::{Arc, Mutex};
 
         let conn_url = env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL not set");
@@ -141,24 +148,22 @@ mod tests {
         };
         assert_eq!(insert_result, OdbcError::Success as i32);
 
-        let lines: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-        let user_data_arc = Arc::clone(&lines); // clone para manter ownership fora
+        let binary_data: Arc<Mutex<Vec<Vec<u8>>>> = Arc::new(Mutex::new(Vec::new()));
+        let user_data_arc = Arc::clone(&binary_data);
 
-        extern "C" fn collect_callback(line: *const c_char, user_data: *mut c_void) {
-            if line.is_null() || user_data.is_null() {
+        extern "C" fn collect_callback(binary: *const BinaryData, user_data: *mut c_void) {
+            if binary.is_null() || user_data.is_null() {
                 return;
             }
 
-            let c_str = unsafe { CStr::from_ptr(line) };
-            let rust_string = c_str.to_string_lossy().to_string();
+            let data =
+                unsafe { std::slice::from_raw_parts((*binary).data, (*binary).len) }.to_vec();
 
-            let arc = unsafe { Arc::from_raw(user_data as *const Mutex<Vec<String>>) };
-
+            let arc = unsafe { Arc::from_raw(user_data as *const Mutex<Vec<Vec<u8>>>) };
             {
                 let mut lock = arc.lock().unwrap();
-                lock.push(rust_string);
+                lock.push(data);
             }
-
             std::mem::forget(arc);
         }
 
@@ -170,12 +175,18 @@ mod tests {
         assert_eq!(select_result, OdbcError::Success as i32);
 
         unsafe {
-            Arc::from_raw(user_data_ptr as *const Mutex<Vec<String>>);
+            Arc::from_raw(user_data_ptr as *const Mutex<Vec<Vec<u8>>>);
         }
 
-        let collected = lines.lock().unwrap();
-        assert_eq!(collected[0], "id,name");
-        assert_eq!(collected[1], "1,Test");
+        let collected = binary_data.lock().unwrap();
+
+        let header: Header = rmp_serde::from_slice(&collected[0]).unwrap();
+        assert_eq!(header.columns, vec!["id", "name"]);
+
+        let row: std::collections::HashMap<String, serde_json::Value> =
+            rmp_serde::from_slice(&collected[1]).unwrap();
+        assert_eq!(row["id"], 1);
+        assert_eq!(row["name"], "Test");
 
         let drop_sql = CString::new("DROP TABLE temp_ffi_test").unwrap();
         let drop_result = unsafe {
@@ -192,5 +203,5 @@ mod tests {
         assert_eq!(free_result, OdbcError::Success as i32);
     }
 
-    extern "C" fn dummy_callback(_line: *const c_char, _user_data: *mut c_void) {}
+    extern "C" fn dummy_callback(_binary: *const BinaryData, _user_data: *mut c_void) {}
 }

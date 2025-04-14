@@ -1,4 +1,4 @@
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 use std::os::raw::{c_char, c_int, c_void};
 use std::{panic, ptr};
 
@@ -23,6 +23,12 @@ pub enum OdbcError {
     NullPointer = 4,
     ExecutionError = 5,
     Panic = 6,
+}
+
+#[repr(C)]
+pub struct BinaryData {
+    pub data: *const u8,
+    pub len: usize,
 }
 
 #[unsafe(no_mangle)]
@@ -72,7 +78,7 @@ pub unsafe extern "C" fn odbc_connect(
 pub unsafe extern "C" fn odbc_execute(
     handle: *mut OdbcConnectionHandle,
     sql: *const c_char,
-    callback: extern "C" fn(*const c_char, *mut c_void),
+    callback: extern "C" fn(*const BinaryData, *mut c_void),
     user_data: *mut c_void,
 ) -> i32 {
     let result = panic::catch_unwind(|| {
@@ -90,13 +96,16 @@ pub unsafe extern "C" fn odbc_execute(
             .to_str()
             .map_err(|_| OdbcError::StringConversionError)?;
 
-        let on_csv = |line: String| {
-            if let Ok(c_line) = CString::new(line) {
-                callback(c_line.as_ptr(), user_data);
-            }
+        let on_binary = |data: Vec<u8>| {
+            let binary_data = BinaryData {
+                data: data.as_ptr(),
+                len: data.len(),
+            };
+            callback(&binary_data as *const BinaryData, user_data);
+            std::mem::forget(data);
         };
 
-        execute(conn, sql_str, on_csv).map_err(|_| OdbcError::ExecutionError)
+        execute(conn, sql_str, on_binary).map_err(|_| OdbcError::ExecutionError)
     });
 
     match result {
